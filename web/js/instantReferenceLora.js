@@ -156,6 +156,37 @@ function removeOptionalInput(node, name) {
   }
 }
 
+function getManagedSlots(profiles) {
+  const managedSlots = new Map();
+  for (const profile of Object.values(profiles || {})) {
+    for (const slot of profile?.slots || []) {
+      if (!slot?.name || !slot?.type) {
+        continue;
+      }
+      if (slot.type === "MODEL" || slot.type === "CLIP") {
+        continue;
+      }
+      if (!managedSlots.has(slot.name)) {
+        managedSlots.set(slot.name, slot.type);
+      }
+    }
+  }
+  return managedSlots;
+}
+
+function scheduleProfileInputSync(node) {
+  if (!node) {
+    return;
+  }
+  if (node.__instantReferenceLoraProfileSyncTimer) {
+    window.clearTimeout(node.__instantReferenceLoraProfileSyncTimer);
+  }
+  node.__instantReferenceLoraProfileSyncTimer = window.setTimeout(() => {
+    node.__instantReferenceLoraProfileSyncTimer = null;
+    syncProfileInputs(node);
+  }, 0);
+}
+
 async function syncProfileInputs(node) {
   const profileWidget = findWidget(node, "profile");
   if (!profileWidget) {
@@ -173,11 +204,11 @@ async function syncProfileInputs(node) {
   const selectedKey = profileWidget.value;
   const selectedProfile = profiles?.[selectedKey];
   const requiredSlots = new Map((selectedProfile?.slots || []).map((slot) => [slot.name, slot.type]));
+  const managedSlots = getManagedSlots(profiles);
 
-  const knownOptionalSlots = new Set(["vae"]);
-  for (const slotName of knownOptionalSlots) {
+  for (const [slotName, slotType] of managedSlots.entries()) {
     if (requiredSlots.has(slotName)) {
-      ensureOptionalInput(node, slotName, requiredSlots.get(slotName));
+      ensureOptionalInput(node, slotName, requiredSlots.get(slotName) || slotType);
     } else {
       removeOptionalInput(node, slotName);
     }
@@ -258,7 +289,7 @@ function ensureNodeWidgets(node) {
   node.__instantReferenceLoraClearCacheWidget = clearCacheWidget;
 
   refreshCacheInfo(node);
-  syncProfileInputs(node);
+  scheduleProfileInputSync(node);
   startAutoCacheRefresh();
 }
 
@@ -278,7 +309,7 @@ app.registerExtension({
         const originalCallback = profileWidget.callback;
         profileWidget.callback = (...args) => {
           const callbackResult = originalCallback ? originalCallback.apply(profileWidget, args) : undefined;
-          syncProfileInputs(this);
+          scheduleProfileInputSync(this);
           return callbackResult;
         };
         profileWidget.__instantReferenceLoraWrapped = true;
@@ -290,7 +321,15 @@ app.registerExtension({
     nodeType.prototype.onConfigure = function () {
       const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
       ensureNodeWidgets(this);
-      syncProfileInputs(this);
+      scheduleProfileInputSync(this);
+      return result;
+    };
+
+    const onAdded = nodeType.prototype.onAdded;
+    nodeType.prototype.onAdded = function () {
+      const result = onAdded ? onAdded.apply(this, arguments) : undefined;
+      ensureNodeWidgets(this);
+      scheduleProfileInputSync(this);
       return result;
     };
 

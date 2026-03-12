@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import tomllib
 from dataclasses import dataclass
@@ -90,7 +91,9 @@ def profiles_fingerprint(profiles: Iterable[ProfileDefinition]) -> str:
 
 
 def _toml_safe_value(value: str) -> str:
-    return value.replace("\\", "/")
+    normalized = value.replace("\\", "/")
+    # Tokens are substituted inside TOML basic strings, so escape only the content.
+    return json.dumps(normalized)[1:-1]
 
 
 def replace_profile_tokens(config: str, slot_values: dict[str, str], builtins: dict[str, str]) -> str:

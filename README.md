@@ -9,7 +9,7 @@ Under the hood, it uses `sd-scripts` for tagging and LoRA training.
 
 ### Instant Reference LoRA
 
-Main training node. It takes a `MODEL`, `CLIP`, and reference `IMAGE` batch, prepares captions, runs the selected training profile, caches identical runs, and outputs the patched `MODEL`, patched `CLIP`, and generated `lora_path`.
+Main training node. It takes a reference `IMAGE` batch plus whatever typed inputs the selected profile declares with `{{name:TYPE}}` tokens, prepares captions, runs the selected training profile, caches identical runs, and outputs the patched `MODEL`, patched `CLIP`, and generated `lora_path`.
 
 ### Reference Tagging Options
 
@@ -23,8 +23,8 @@ Helper node for training overrides. Use it to override steps, learning rate, net
 
 ### SDXL Reference LoRA
 
-Default SDXL-oriented profile based on `sdxl_train_network.py`. It trains a LoCon-style LoRA at `1024x1024`, uses `bf16`, keeps the run short with `50` default steps, and is meant for fast reference adaptation on SDXL checkpoints.
+Default SDXL-oriented profile based on `sdxl_train_network.py`. It trains a LoCon-style LoRA at `1024x1024`, uses `bf16`, keeps the run short with `50` default steps, and is meant for fast reference adaptation on SDXL checkpoints. Its profile declares only `{{model:MODEL}}`, so only a model slot is exposed alongside the images.
 
 ### Anima Reference LoRA
 
-An Anima-oriented profile based on `anima_train_network.py`. It also runs at `1024x1024` with `50` default steps, trains a lightweight LoRA for the UNet only, and requires an additional `VAE` input through the profile slot.
+An Anima-oriented profile based on `anima_train_network.py`. It also runs at `1024x1024` with `50` default steps, trains a lightweight LoRA for the UNet only, and its profile declares `{{model:MODEL}}`, `{{clip:CLIP}}`, and `{{vae:VAE}}`, so those sockets are exposed automatically.

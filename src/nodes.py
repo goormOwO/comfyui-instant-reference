@@ -136,15 +136,22 @@ def _effective_max_train_steps(profile: ProfileDefinition, options: TrainOptions
 def _profile_choice_inputs(profile: ProfileDefinition) -> list[Any]:
     inputs: list[Any] = []
     for slot in profile.slots:
+        if slot.slot_type in {"MODEL", "CLIP"}:
+            continue
         if slot.slot_type == "STRING":
             inputs.append(io.String.Input(slot.name, multiline=False))
-        elif slot.slot_type == "MODEL":
-            inputs.append(io.Model.Input(slot.name))
-        elif slot.slot_type == "CLIP":
-            inputs.append(io.Clip.Input(slot.name))
         elif slot.slot_type == "VAE":
             inputs.append(io.Vae.Input(slot.name))
     return inputs
+
+
+def _profile_slots_by_type(profile: ProfileDefinition, slot_type: str) -> list[SlotSpec]:
+    return [slot for slot in profile.slots if slot.slot_type == slot_type]
+
+
+def _primary_profile_slot(profile: ProfileDefinition, slot_type: str) -> SlotSpec | None:
+    slots = _profile_slots_by_type(profile, slot_type)
+    return slots[0] if slots else None
 
 
 def _recover_model_checkpoint_path(model: Any) -> str:
@@ -326,16 +333,11 @@ def _cache_key(
 
 
 def _builtins_for_run(
-    checkpoint_path: str,
-    clip_path: str,
     dataset_dir: Path,
     output_dir: Path,
     output_name: str,
 ) -> dict[str, str]:
     return {
-        "CHECKPOINT_PATH": checkpoint_path,
-        "MODEL_PATH": checkpoint_path,
-        "CLIP_PATH": clip_path,
         "TRAIN_DIR": str(dataset_dir),
         "OUTPUT_DIR": str(output_dir),
         "OUTPUT_NAME": output_name,
@@ -486,7 +488,7 @@ class InstantReferenceLoRA(io.ComfyNode):
         )
 
     @classmethod
-    def fingerprint_inputs(cls, model, clip, images, profile):
+    def fingerprint_inputs(cls, model=None, clip=None, images=None, profile=None):
         profiles = load_profiles(_plugin_root())
         return profiles_fingerprint(profiles)
 
@@ -510,8 +512,10 @@ def _execute_reference_lora(model, clip, images, profile, model_strength=1.0, cl
         resolved_tagging = _tagging_options_from_input(tagging_options)
         resolved_train = _train_options_from_input(train_options)
         target_steps = _effective_max_train_steps(selected_profile, resolved_train)
+        model_slot = _primary_profile_slot(selected_profile, "MODEL")
+        if model_slot is None:
+            raise RuntimeError(f"Profile '{selected_profile.name}' must define a MODEL slot such as '{{{{model:MODEL}}}}'.")
         checkpoint_path = _recover_model_checkpoint_path(model)
-        clip_path = _recover_clip_paths(clip)[0]
         temp_image_hash = hash_tensor_batch(images)
         paths = get_runtime_paths()
         temp_run_dir = ensure_dir(paths.cache / f"_inflight_{temp_image_hash}")
@@ -525,6 +529,12 @@ def _execute_reference_lora(model, clip, images, profile, model_strength=1.0, cl
 
         resolved_slots: dict[str, ResolvedSlot] = {}
         for slot in selected_profile.slots:
+            if slot.slot_type == "MODEL":
+                resolved_slots[slot.name] = _resolve_slot(slot, model)
+                continue
+            if slot.slot_type == "CLIP":
+                resolved_slots[slot.name] = _resolve_slot(slot, clip)
+                continue
             if slot.name not in profile:
                 raise RuntimeError(f"Profile '{selected_profile.name}' requires input '{slot.name}'.")
             resolved_slots[slot.name] = _resolve_slot(slot, profile[slot.name])
@@ -550,7 +560,7 @@ def _execute_reference_lora(model, clip, images, profile, model_strength=1.0, cl
 
         if cached_lora is None:
             ensure_sd_scripts_environment(paths, log_path=run_log)
-            builtins = _builtins_for_run(checkpoint_path, clip_path, dataset_dir, output_dir, output_name)
+            builtins = _builtins_for_run(dataset_dir, output_dir, output_name)
             config_path = _write_resolved_config(selected_profile, resolved_slots, builtins, run_dir, resolved_train)
             write_json(
                 manifest,
@@ -594,9 +604,17 @@ def _v1_slot_type(slot_type: str):
 
 def _all_optional_profile_inputs() -> dict[str, tuple]:
     # Keep V1 inputs stable so existing nodes do not accumulate stale profile-specific sockets.
-    return {
-        "vae": ("VAE",),
-    }
+    merged: dict[str, tuple] = {}
+    for profile in load_profiles(_plugin_root()):
+        for slot in profile.slots:
+            if slot.slot_type in {"MODEL", "CLIP"}:
+                continue
+            existing = merged.get(slot.name)
+            current = _v1_slot_type(slot.slot_type)
+            if existing is not None and existing != (current,):
+                raise RuntimeError(f"Profile input '{slot.name}' uses conflicting types across profiles.")
+            merged[slot.name] = (current,)
+    return merged
 
 
 class InstantReferenceLoRAV1:
