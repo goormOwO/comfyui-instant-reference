@@ -32,7 +32,7 @@ from .runtime import (
 )
 
 
-NODE_VERSION = "0.1.2"
+NODE_VERSION = "0.1.3"
 MAX_TRAIN_STEPS_PATTERN = re.compile(r"^\s*max_train_steps\s*=\s*(\d+)\s*$", re.MULTILINE)
 MIXED_PRECISION_PATTERN = re.compile(r'^\s*mixed_precision\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
