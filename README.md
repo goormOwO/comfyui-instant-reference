@@ -1,4 +1,4 @@
-# comfyui-reference
+# ComfyUI Instant Reference
 
 A custom node for ComfyUI that turns a reference image set into a quick LoRA and applies it back to the current workflow.
 

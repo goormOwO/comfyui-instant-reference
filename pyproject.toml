@@ -1,7 +1,7 @@
 [project]
-name = "comfyui-reference"
+name = "comfyui-instant-reference"
 version = "0.1.0"
-description = "Starter ComfyUI custom node project following the official walkthrough layout"
+description = "ComfyUI Instant Reference custom node"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

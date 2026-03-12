@@ -1,5 +1,5 @@
 [project]
-name = "comfyui-reference-runtime"
+name = "comfyui-instant-reference-runtime"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
