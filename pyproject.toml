@@ -4,7 +4,15 @@ version = "0.1.0"
 description = "ComfyUI Instant Reference custom node"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/goormOwO/comfyui-instant-reference"
+
+[tool.comfy]
+PublisherId = "goormowo"
+DisplayName = "ComfyUI Instant Reference"
 
 [tool.ruff]
 line-length = 100
