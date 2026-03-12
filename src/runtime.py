@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +22,10 @@ try:
 except Exception:
     comfy_model_management = None
 
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
 
 SETUP_VERSION = "11"
 SD_SCRIPTS_REPO = "https://github.com/kohya-ss/sd-scripts.git"
@@ -32,6 +35,92 @@ TORCH_PACKAGES = [
     "torch==2.7.0+cu128",
     "torchvision==0.22.0+cu128",
 ]
+
+
+if os.name == "nt":
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+    _JobObjectExtendedLimitInformation = 9
+    _PROCESS_TERMINATE = 0x0001
+    _PROCESS_SET_QUOTA = 0x0100
+
+    class _IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", _IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+
+def _create_windows_job() -> int | None:
+    if os.name != "nt":
+        return None
+
+    job = _kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+
+    info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    result = _kernel32.SetInformationJobObject(
+        job,
+        _JobObjectExtendedLimitInformation,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if not result:
+        error = ctypes.get_last_error()
+        _kernel32.CloseHandle(job)
+        raise OSError(error, "SetInformationJobObject failed")
+    return job
+
+
+def _assign_process_to_windows_job(process: subprocess.Popen, job_handle: int | None) -> None:
+    if os.name != "nt" or job_handle is None:
+        return
+
+    access = _PROCESS_SET_QUOTA | _PROCESS_TERMINATE
+    process_handle = _kernel32.OpenProcess(access, False, process.pid)
+    if not process_handle:
+        raise OSError(ctypes.get_last_error(), f"OpenProcess failed for pid {process.pid}")
+    try:
+        result = _kernel32.AssignProcessToJobObject(job_handle, process_handle)
+        if not result:
+            raise OSError(ctypes.get_last_error(), f"AssignProcessToJobObject failed for pid {process.pid}")
+    finally:
+        _kernel32.CloseHandle(process_handle)
+
+
+def _close_windows_job(job_handle: int | None) -> None:
+    if os.name != "nt" or job_handle is None:
+        return
+    _kernel32.CloseHandle(job_handle)
 
 
 def plugin_root() -> Path:
@@ -203,6 +292,7 @@ def run_command(command: list[str], cwd: Path, log_path: Path | None = None, env
     joined_command = " ".join(command)
     log_handle = None
     process: subprocess.Popen | None = None
+    job_handle: int | None = None
     recent_output: list[str] = []
 
     try:
@@ -219,6 +309,9 @@ def run_command(command: list[str], cwd: Path, log_path: Path | None = None, env
         else:
             popen_kwargs["start_new_session"] = True
 
+        if os.name == "nt":
+            job_handle = _create_windows_job()
+
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -232,6 +325,7 @@ def run_command(command: list[str], cwd: Path, log_path: Path | None = None, env
             creationflags=creationflags,
             **popen_kwargs,
         )
+        _assign_process_to_windows_job(process, job_handle)
 
         assert process.stdout is not None
         output_queue: queue.Queue[str | None] = queue.Queue()
@@ -289,6 +383,7 @@ def run_command(command: list[str], cwd: Path, log_path: Path | None = None, env
             _terminate_process_tree(process, log_handle)
         raise
     finally:
+        _close_windows_job(job_handle)
         if log_handle is not None:
             log_handle.close()
 
