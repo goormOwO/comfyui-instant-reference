@@ -1,4 +1,4 @@
-name = "Anima Fast Reference LoRA"
+name = "Anima Reference LoRA"
 script = "anima_train_network.py"
 config = """
 pretrained_model_name_or_path = "{{MODEL_PATH}}"
