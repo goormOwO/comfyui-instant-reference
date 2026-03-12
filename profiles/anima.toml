@@ -1,0 +1,43 @@
+name = "Anima Fast Reference LoRA"
+script = "anima_train_network.py"
+config = """
+pretrained_model_name_or_path = "{{MODEL_PATH}}"
+qwen3 = "{{CLIP_PATH}}"
+vae = "{{vae:VAE}}"
+train_data_dir = "{{TRAIN_DIR}}"
+output_dir = "{{OUTPUT_DIR}}"
+output_name = "{{OUTPUT_NAME}}"
+caption_extension = "{{CAPTION_EXTENSION}}"
+resolution = "1024,1024"
+enable_bucket = true
+min_bucket_reso = 1024
+max_bucket_reso = 1024
+bucket_no_upscale = true
+flip_aug = false
+random_crop = false
+
+max_train_steps = 50
+learning_rate = 0.001
+optimizer_type = "AdamW"
+lr_scheduler = "constant"
+
+network_module = "networks.lora_anima"
+network_args = [
+  "module_dropout=0.05",
+]
+network_dim = 8
+network_alpha = 1
+network_train_unet_only = true
+
+mixed_precision = "bf16"
+attn_mode = "xformers"
+gradient_checkpointing = false
+cache_latents = true
+cache_text_encoder_outputs = true
+max_data_loader_n_workers = 0
+persistent_data_loader_workers = false
+
+save_model_as = "safetensors"
+save_precision = "bf16"
+seed = 42
+"""

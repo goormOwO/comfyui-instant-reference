@@ -1,0 +1,51 @@
+name = "SDXL Reference LoRA"
+script = "sdxl_train_network.py"
+config = """
+pretrained_model_name_or_path = "{{MODEL_PATH}}"
+train_data_dir = "{{TRAIN_DIR}}"
+output_dir = "{{OUTPUT_DIR}}"
+output_name = "{{OUTPUT_NAME}}"
+caption_extension = "{{CAPTION_EXTENSION}}"
+
+resolution = "1024,1024"
+enable_bucket = true
+min_bucket_reso = 1024
+max_bucket_reso = 1024
+bucket_no_upscale = true
+flip_aug = false
+random_crop = false
+
+max_train_steps = 50
+optimizer_type = "AdamW"
+learning_rate = 0.001
+lr_scheduler = "constant"
+
+network_module = "lycoris.kohya"
+network_args = [
+  "algo=locon",
+  "conv_dim=16",
+  "conv_alpha=16",
+  "rank_dropout=0.05",
+  "module_dropout=0.05",
+  "train_norm=False",
+]
+network_dim = 16
+network_alpha = 16
+network_train_unet_only = true
+
+loss_type = "l2"
+min_snr_gamma = 5.0
+noise_offset = 0.1
+noise_offset_random_strength = true
+
+mixed_precision = "bf16"
+sdpa = true
+xformers = false
+gradient_checkpointing = false
+cache_latents = true
+cache_text_encoder_outputs = true
+
+save_model_as = "safetensors"
+save_precision = "bf16"
+seed = 42
+"""
