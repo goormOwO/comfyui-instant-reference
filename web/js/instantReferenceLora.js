@@ -2,7 +2,12 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
 const EXTENSION_NAME = "comfyui-reference.instant-reference-lora";
-const TARGET_NODE_NAMES = new Set(["InstantReferenceLoRA", "Instant Reference LoRA"]);
+const TRAINING_NODE_NAMES = new Set([
+  "InstantReferenceLoRA",
+  "Instant Reference LoRA",
+  "InstantReferenceLoRATrain",
+  "Instant Reference LoRA Train",
+]);
 let profileSlotMapPromise = null;
 let cacheRefreshTimer = null;
 const CACHE_REFRESH_INTERVAL_MS = 5000;
@@ -125,8 +130,16 @@ async function downloadLora(node) {
   }
 }
 
-function isTargetNode(nodeData) {
-  return TARGET_NODE_NAMES.has(nodeData?.name) || TARGET_NODE_NAMES.has(nodeData?.display_name);
+function nodeMatches(nodeData, names) {
+  return names.has(nodeData?.name) || names.has(nodeData?.display_name);
+}
+
+function isTrainingNode(nodeData) {
+  return nodeMatches(nodeData, TRAINING_NODE_NAMES);
+}
+
+function isTrainingNodeInstance(node) {
+  return TRAINING_NODE_NAMES.has(node?.type) || TRAINING_NODE_NAMES.has(node?.comfyClass);
 }
 
 function findWidget(node, name) {
@@ -247,7 +260,7 @@ function startAutoCacheRefresh() {
   cacheRefreshTimer = window.setInterval(() => {
     const nodes = app.graph?._nodes || [];
     for (const node of nodes) {
-      if (TARGET_NODE_NAMES.has(node.type) || TARGET_NODE_NAMES.has(node.comfyClass)) {
+      if (isTrainingNodeInstance(node)) {
         refreshCacheInfo(node);
       }
     }
@@ -296,7 +309,7 @@ function ensureNodeWidgets(node) {
 app.registerExtension({
   name: EXTENSION_NAME,
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (!isTargetNode(nodeData)) {
+    if (!isTrainingNode(nodeData)) {
       return;
     }
 

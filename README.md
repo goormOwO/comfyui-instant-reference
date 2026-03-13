@@ -20,7 +20,15 @@ Drop `assets/workflows.png` into ComfyUI to load the included SDXL example workf
 
 ### Instant Reference LoRA
 
-Main training node. It takes a reference `IMAGE` batch plus whatever typed inputs the selected profile declares with `{{name:TYPE}}` tokens, prepares captions, runs the selected training profile, caches identical runs, and outputs the patched `MODEL`, patched `CLIP`, and generated `lora_path`.
+Main combined node. It takes a reference `IMAGE` batch plus whatever typed inputs the selected profile declares with `{{name:TYPE}}` tokens, prepares captions, runs the selected training profile, caches identical runs, and outputs the patched `MODEL`, patched `CLIP`, generated `lora_path`, and `lora_stack`.
+
+### Instant Reference LoRA Train
+
+Training-only node. It uses the same profile-driven inputs and cache behavior as the combined node, but only trains or reuses a LoRA and outputs it as `lora_stack` for downstream nodes.
+
+### Instant Reference LoRA Apply
+
+Apply-only node. It takes an incoming `lora_stack`, applies each LoRA entry in order to the provided `MODEL` and `CLIP`, and passes the stack through unchanged.
 
 ### Reference Tagging Options
 

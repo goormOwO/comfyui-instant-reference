@@ -267,9 +267,10 @@ def hash_file(path: Path) -> str:
 
 def hash_tensor_batch(images: Any) -> str:
     array = images.detach().cpu().numpy()
+    normalized = np.clip(array * 255.0, 0, 255).astype(np.uint8)
     digest = hashlib.sha256()
-    digest.update(str(array.shape).encode("utf-8"))
-    digest.update(array.tobytes())
+    digest.update(str(normalized.shape).encode("utf-8"))
+    digest.update(normalized.tobytes())
     return digest.hexdigest()
 
 
