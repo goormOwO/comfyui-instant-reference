@@ -9,6 +9,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import sysconfig
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,11 +32,6 @@ if os.name == "nt":
 SETUP_VERSION = "11"
 SD_SCRIPTS_REPO = "https://github.com/kohya-ss/sd-scripts.git"
 SD_SCRIPTS_COMMIT = "1a3ec9ea745fe9883551dfca5c947ea3d6aa68c7"
-TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu128"
-TORCH_PACKAGES = [
-    "torch==2.7.0+cu128",
-    "torchvision==0.22.0+cu128",
-]
 
 
 if os.name == "nt":
@@ -132,10 +128,6 @@ def runtime_root() -> Path:
     return plugin_root() / "runtime"
 
 
-def managed_requirements_path() -> Path:
-    return plugin_root() / "requirements-runtime.txt"
-
-
 def uv_executable() -> str | None:
     env_candidates = [
         os.environ.get("COMFYUI_UV"),
@@ -150,6 +142,8 @@ def uv_executable() -> str | None:
     parent_candidates = [executable_path.parent, *executable_path.parents]
     relative_candidates = [
         Path("uv.exe"),
+        Path("Scripts") / "uv.exe",
+        Path("bin") / "uv",
         Path("uv") / "win" / "uv.exe",
         Path("resources") / "uv" / "win" / "uv.exe",
         Path("..") / "resources" / "uv" / "win" / "uv.exe",
@@ -167,7 +161,32 @@ def uv_executable() -> str | None:
         if candidate.exists():
             return str(candidate)
 
+    scripts_dir = Path(sysconfig.get_path("scripts"))
+    if os.name == "nt":
+        scripts_candidate = scripts_dir / "uv.exe"
+    else:
+        scripts_candidate = scripts_dir / "uv"
+    if scripts_candidate.exists():
+        return str(scripts_candidate)
+
     return shutil.which("uv")
+
+
+def ensure_uv(paths: RuntimePaths, log_path: Path | None = None) -> str:
+    uv = uv_executable()
+    if uv is not None:
+        return uv
+
+    run_command(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "uv"],
+        cwd=paths.root,
+        log_path=log_path,
+    )
+
+    uv = uv_executable()
+    if uv is None:
+        raise RuntimeError("Failed to install uv with pip.")
+    return uv
 
 
 def runtime_project_dir() -> Path:
@@ -414,16 +433,10 @@ def ensure_sd_scripts_environment(paths: RuntimePaths, log_path: Path | None = N
     ensure_sd_scripts_checkout(paths, log_path=log_path)
 
     python_path = venv_python(paths.venv)
-    uv = uv_executable()
-    if uv is not None and not python_path.exists():
+    uv = ensure_uv(paths, log_path=log_path)
+    if not python_path.exists():
         run_command(
             [uv, "venv", "--python", sys.executable, "--system-site-packages", str(paths.venv)],
-            cwd=paths.root,
-            log_path=log_path,
-        )
-    elif not python_path.exists():
-        run_command(
-            [sys.executable, "-m", "venv", "--system-site-packages", str(paths.venv)],
             cwd=paths.root,
             log_path=log_path,
         )
@@ -433,52 +446,25 @@ def ensure_sd_scripts_environment(paths: RuntimePaths, log_path: Path | None = N
         if marker.read_text(encoding="utf-8").strip() == SETUP_VERSION and runtime_imports_ready(python_path):
             return
 
-    if uv is not None:
-        sync_env = os.environ.copy()
-        sync_env.setdefault("PYTHONUTF8", "1")
-        sync_env.setdefault("PYTHONIOENCODING", "utf-8")
-        sync_env["VIRTUAL_ENV"] = str(paths.venv)
-        scripts_dir = python_path.parent
-        sync_env["PATH"] = str(scripts_dir) + os.pathsep + sync_env.get("PATH", "")
-        run_command(
-            [
-                uv,
-                "sync",
-                "--active",
-                "--project",
-                str(runtime_project_dir()),
-                "--no-install-project",
-            ],
-            cwd=runtime_project_dir(),
-            log_path=log_path,
-            env=sync_env,
-        )
-    else:
-        run_command(
-            [str(python_path), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
-            cwd=paths.sd_scripts,
-            log_path=log_path,
-        )
-
-        run_command(
-            [str(python_path), "-m", "pip", "install", *TORCH_PACKAGES, "--index-url", TORCH_INDEX_URL],
-            cwd=paths.sd_scripts,
-            log_path=log_path,
-        )
-
-        managed_requirements = managed_requirements_path()
-        if managed_requirements.exists():
-            run_command(
-                [str(python_path), "-m", "pip", "install", "--upgrade", "-r", str(managed_requirements)],
-                cwd=paths.root,
-                log_path=log_path,
-            )
-
-        run_command(
-            [str(python_path), "-m", "pip", "install", "--upgrade", "-e", str(paths.sd_scripts)],
-            cwd=paths.root,
-            log_path=log_path,
-        )
+    sync_env = os.environ.copy()
+    sync_env.setdefault("PYTHONUTF8", "1")
+    sync_env.setdefault("PYTHONIOENCODING", "utf-8")
+    sync_env["VIRTUAL_ENV"] = str(paths.venv)
+    scripts_dir = python_path.parent
+    sync_env["PATH"] = str(scripts_dir) + os.pathsep + sync_env.get("PATH", "")
+    run_command(
+        [
+            uv,
+            "sync",
+            "--active",
+            "--project",
+            str(runtime_project_dir()),
+            "--no-install-project",
+        ],
+        cwd=runtime_project_dir(),
+        log_path=log_path,
+        env=sync_env,
+    )
 
     if not runtime_imports_ready(python_path):
         raise RuntimeError(f"Managed runtime is missing required packages in {paths.venv}")
