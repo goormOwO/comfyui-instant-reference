@@ -16,35 +16,56 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Validate tag matches pyproject version
+      - name: Stamp release version from tag
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import os
           import pathlib
+          import re
           import sys
-
-          try:
-              import tomllib
-          except ModuleNotFoundError:
-              import tomli as tomllib
 
           tag = os.environ["GITHUB_REF_NAME"].strip()
           normalized_tag = tag[1:] if tag.startswith("v") else tag
 
-          pyproject = pathlib.Path("pyproject.toml")
-          data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-          version = data["project"]["version"].strip()
-
-          if normalized_tag != version:
+          if not re.fullmatch(r"\d+\.\d+\.\d+", normalized_tag):
               print(
-                  f"Tag '{tag}' does not match pyproject version '{version}'.",
+                  f"Tag '{tag}' does not look like a release version.",
                   file=sys.stderr,
               )
               sys.exit(1)
 
-          print(f"Publishing version {version} from tag {tag}.")
+          def stamp_version(path_str: str) -> None:
+              path = pathlib.Path(path_str)
+              content = path.read_text(encoding="utf-8")
+              updated, count = re.subn(
+                  r'(?m)^(version\s*=\s*")[^"]+(")\s*$',
+                  rf"\g<1>{normalized_tag}\2",
+                  content,
+                  count=1,
+              )
+              if count != 1:
+                  raise RuntimeError(f"Could not stamp version in {path}")
+              path.write_text(updated, encoding="utf-8")
+
+          stamp_version("pyproject.toml")
+          stamp_version("runtime_env/pyproject.toml")
+
+          version_line = next(
+              line
+              for line in pathlib.Path("pyproject.toml").read_text(encoding="utf-8").splitlines()
+              if line.strip().startswith("version")
+          )
+
+          if f'"{normalized_tag}"' not in version_line:
+              print(
+                  f"Tag '{tag}' does not match stamped pyproject version.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"Publishing version {normalized_tag} from tag {tag}.")
           PY
 
       - name: Publish Custom Node

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +35,34 @@ from .runtime import (
 )
 
 
-NODE_VERSION = "0.1.4"
+def _read_project_version() -> str:
+    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    content = pyproject_path.read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"\s*$', content, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"Could not find project version in {pyproject_path}")
+    version = match.group(1)
+    if version != "0.0.0":
+        return version
+
+    git_dir = pyproject_path.parent / ".git"
+    if not git_dir.exists():
+        return version
+
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=pyproject_path.parent,
+            text=True,
+            encoding="utf-8",
+        ).strip()
+    except Exception:
+        return version
+
+    return f"{version}+{git_sha}" if git_sha else version
+
+
+NODE_VERSION = _read_project_version()
 MAX_TRAIN_STEPS_PATTERN = re.compile(r"^\s*max_train_steps\s*=\s*(\d+)\s*$", re.MULTILINE)
 MIXED_PRECISION_PATTERN = re.compile(r'^\s*mixed_precision\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 
