@@ -16,6 +16,11 @@ This node is still fairly rough and has only been tested with simple workflows s
 ![Workflow example](./assets/workflows.png)
 Drop `assets/workflows.png` into ComfyUI to load the included SDXL example workflow.
 
+## Train/Apply Split Workflow Example
+
+![Train/apply workflow example](./assets/workflow-train-apply.png)
+Example layout using `Instant Reference LoRA Train` followed by `Instant Reference LoRA Apply`, with the trained `lora_stack` passed into the apply node.
+
 ## Nodes
 
 ### Instant Reference LoRA
