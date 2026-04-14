@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,14 @@ def _collect_dataset_tags(captions: dict[str, str]) -> str:
                 seen.add(tag)
                 tags.append(tag)
     return ",".join(tags)
+
+
+def _first_dataset_image(dataset_dir: Path) -> Path | None:
+    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        candidates = sorted(dataset_dir.rglob(pattern))
+        if candidates:
+            return candidates[0]
+    return None
 
 
 def _unwrap_options_input(value: Any | None, key: str) -> dict[str, Any]:
@@ -711,32 +720,54 @@ def _train_reference_lora(model, clip, images, profile, tagging_options=None, tr
         output_name = f"instant_lora_{cache_key[:12]}"
         manifest = run_dir / "manifest.json"
         cached_lora = None if resolved_train.force_retrain else latest_safetensors(output_dir)
+        thumbnail_path = _first_dataset_image(dataset_dir)
+        manifest_payload = {
+            "cache_key": cache_key,
+            "checkpoint_path": checkpoint_path,
+            "profile": selected_profile.key,
+            "profile_file": str(selected_profile.file_path),
+            "dataset_dir": str(dataset_dir),
+            "thumbnail_path": str(thumbnail_path) if thumbnail_path else "",
+            "captions": captions,
+            "tags": dataset_tags,
+            "tagging_options": resolved_tagging.__dict__,
+            "train_options": resolved_train.__dict__,
+            "resolved_slots": {name: slot.replacement for name, slot in resolved_slots.items()},
+        }
 
         if cached_lora is None:
             ensure_sd_scripts_environment(paths, log_path=run_log)
             builtins = _builtins_for_run(dataset_dir, output_dir, output_name)
             config_path = _write_resolved_config(selected_profile, resolved_slots, builtins, run_dir, resolved_train)
-            write_json(
-                manifest,
-                {
-                    "cache_key": cache_key,
-                    "checkpoint_path": checkpoint_path,
-                    "profile": selected_profile.key,
-                    "profile_file": str(selected_profile.file_path),
-                    "captions": captions,
-                    "tags": dataset_tags,
-                    "tagging_options": resolved_tagging.__dict__,
-                    "train_options": resolved_train.__dict__,
-                    "resolved_slots": {name: slot.replacement for name, slot in resolved_slots.items()},
-                    "config_path": str(config_path),
-                },
-            )
+            manifest_payload["config_path"] = str(config_path)
+            write_json(manifest, manifest_payload)
             comfy.model_management.unload_all_models()
             soft_empty_cache = getattr(comfy.model_management, "soft_empty_cache", None)
             if callable(soft_empty_cache):
                 soft_empty_cache()
             cached_lora = _run_training(selected_profile, run_dir, output_dir, config_path, log_path=run_log)
 
+        if manifest.exists():
+            try:
+                existing_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+                if isinstance(existing_manifest, dict):
+                    manifest_payload.update(existing_manifest)
+            except (OSError, json.JSONDecodeError):
+                pass
+        created_at = manifest_payload.get("created_at")
+        if not isinstance(created_at, (int, float)):
+            created_at = time.time()
+        manifest_payload.update(
+            {
+                "dataset_dir": str(dataset_dir),
+                "thumbnail_path": str(thumbnail_path) if thumbnail_path else "",
+                "lora_path": str(cached_lora),
+                "created_at": float(created_at),
+                "updated_at": time.time(),
+                "tags": dataset_tags,
+            }
+        )
+        write_json(manifest, manifest_payload)
         _record_last_lora(cached_lora)
         return TrainingResult(lora_path=cached_lora, tags=dataset_tags)
     finally:

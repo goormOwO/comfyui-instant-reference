@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from .profiles import load_profiles
 
 
 ROUTES = PromptServer.instance.routes
+LORA_ID_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+SAFE_FILENAME_PATTERN = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
 def _plugin_root() -> Path:
@@ -40,6 +43,19 @@ def _is_path_within(parent: Path, child: Path) -> bool:
         return False
 
 
+def _read_json(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    ensure_dir(path.parent)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _dir_size_bytes(path: Path) -> int:
     if not path.exists():
         return 0
@@ -63,6 +79,188 @@ def _format_bytes(size: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024.0
     return f"{size} B"
+
+
+def _safe_lora_id(raw_id: str) -> str:
+    lora_id = raw_id.strip().lower()
+    if not LORA_ID_PATTERN.match(lora_id):
+        raise ValueError("Invalid LoRA id.")
+    return lora_id
+
+
+def _manifest_path(lora_id: str) -> Path:
+    return get_runtime_paths().cache / lora_id / "manifest.json"
+
+
+def _generated_lora_dir(lora_id: str) -> Path:
+    return get_runtime_paths().generated_loras / lora_id
+
+
+def _latest_generated_lora(lora_id: str) -> Path | None:
+    lora_dir = _generated_lora_dir(lora_id)
+    if not lora_dir.exists():
+        return None
+    candidates = sorted(lora_dir.glob("*.safetensors"), key=lambda item: item.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _resolve_generated_lora(lora_id: str, manifest: dict[str, object]) -> Path | None:
+    raw_lora_path = manifest.get("lora_path")
+    if isinstance(raw_lora_path, str) and raw_lora_path.strip():
+        lora_path = Path(raw_lora_path).expanduser().resolve()
+        outputs_root = get_runtime_paths().generated_loras.resolve()
+        if _is_path_within(outputs_root, lora_path) and lora_path.exists() and lora_path.suffix.lower() == ".safetensors":
+            return lora_path
+    return _latest_generated_lora(lora_id)
+
+
+def _caption_files_payload(subset_dir: Path) -> dict[str, str]:
+    captions: dict[str, str] = {}
+    for path in sorted(subset_dir.glob("*.txt")):
+        captions[path.stem] = path.read_text(encoding="utf-8").strip()
+    return captions
+
+
+def _find_dataset_dir_by_captions(captions: object) -> Path | None:
+    if not isinstance(captions, dict) or not captions:
+        return None
+    expected = {str(key): str(value).strip() for key, value in captions.items()}
+    datasets_root = get_runtime_paths().datasets.resolve()
+    for dataset_dir in sorted(datasets_root.iterdir()):
+        if not dataset_dir.is_dir():
+            continue
+        for subset_dir in sorted(dataset_dir.iterdir()):
+            if not subset_dir.is_dir():
+                continue
+            try:
+                if _caption_files_payload(subset_dir) == expected:
+                    return dataset_dir
+            except OSError:
+                continue
+    return None
+
+
+def _resolve_dataset_dir(manifest: dict[str, object]) -> Path | None:
+    datasets_root = get_runtime_paths().datasets.resolve()
+    for key in ("dataset_dir", "dataset_path"):
+        raw_path = manifest.get(key)
+        if isinstance(raw_path, str) and raw_path.strip():
+            dataset_dir = Path(raw_path).expanduser().resolve()
+            if _is_path_within(datasets_root, dataset_dir) and dataset_dir.exists() and dataset_dir.is_dir():
+                return dataset_dir
+    raw_dataset_key = manifest.get("dataset_key")
+    if isinstance(raw_dataset_key, str) and LORA_ID_PATTERN.match(raw_dataset_key):
+        dataset_dir = datasets_root / raw_dataset_key
+        if dataset_dir.exists() and dataset_dir.is_dir():
+            return dataset_dir
+    return _find_dataset_dir_by_captions(manifest.get("captions"))
+
+
+def _resolve_thumbnail_path(manifest: dict[str, object]) -> Path | None:
+    datasets_root = get_runtime_paths().datasets.resolve()
+    raw_thumbnail = manifest.get("thumbnail_path")
+    if isinstance(raw_thumbnail, str) and raw_thumbnail.strip():
+        thumbnail_path = Path(raw_thumbnail).expanduser().resolve()
+        if _is_path_within(datasets_root, thumbnail_path) and thumbnail_path.exists() and thumbnail_path.is_file():
+            return thumbnail_path
+
+    dataset_dir = _resolve_dataset_dir(manifest)
+    if dataset_dir is None:
+        return None
+    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        candidates = sorted(dataset_dir.rglob(pattern))
+        if candidates:
+            return candidates[0]
+    return None
+
+
+def _profile_name(profile_key: object) -> str:
+    if not isinstance(profile_key, str):
+        return ""
+    for profile in load_profiles(_plugin_root()):
+        if profile.key == profile_key:
+            return profile.name
+    return profile_key
+
+
+def _library_item(lora_id: str) -> dict[str, object] | None:
+    manifest = _read_json(_manifest_path(lora_id))
+    lora_path = _resolve_generated_lora(lora_id, manifest)
+    if lora_path is None:
+        return None
+
+    stat = lora_path.stat()
+    thumbnail_path = _resolve_thumbnail_path(manifest)
+    saved_lora_path = manifest.get("saved_lora_path")
+    saved = isinstance(saved_lora_path, str) and Path(saved_lora_path).exists()
+    tags = manifest.get("tags")
+    if not isinstance(tags, str):
+        tags = ""
+    captions = manifest.get("captions")
+    caption_count = len(captions) if isinstance(captions, dict) else 0
+    return {
+        "id": lora_id,
+        "name": lora_path.stem,
+        "file_name": lora_path.name,
+        "lora_path": str(lora_path),
+        "size_bytes": stat.st_size,
+        "size_human": _format_bytes(stat.st_size),
+        "modified_at": stat.st_mtime,
+        "profile": manifest.get("profile", ""),
+        "profile_name": _profile_name(manifest.get("profile")),
+        "tags": tags,
+        "caption_count": caption_count,
+        "has_thumbnail": thumbnail_path is not None,
+        "thumbnail_url": f"/instant-reference-lora/library/thumbnail?id={lora_id}" if thumbnail_path else "",
+        "saved": saved,
+        "saved_lora_path": saved_lora_path if saved else "",
+    }
+
+
+def _library_payload() -> dict[str, object]:
+    paths = get_runtime_paths()
+    ids: set[str] = set()
+    if paths.generated_loras.exists():
+        for lora_dir in paths.generated_loras.iterdir():
+            if lora_dir.is_dir() and LORA_ID_PATTERN.match(lora_dir.name):
+                ids.add(lora_dir.name)
+    for manifest in paths.cache.glob("*/manifest.json"):
+        if LORA_ID_PATTERN.match(manifest.parent.name):
+            ids.add(manifest.parent.name)
+
+    items = [item for lora_id in sorted(ids) if (item := _library_item(lora_id)) is not None]
+    items.sort(
+        key=lambda item: item["modified_at"] if isinstance(item["modified_at"], (int, float)) else 0.0,
+        reverse=True,
+    )
+    return {
+        "items": items,
+        "generated_loras_dir": str(paths.generated_loras),
+        "lora_dir": str(paths.generated_loras.parent),
+    }
+
+
+def _sanitize_lora_filename(raw_name: str, fallback: str) -> str:
+    name = SAFE_FILENAME_PATTERN.sub("_", raw_name.strip()) if raw_name.strip() else fallback
+    name = name.replace("\\", "_").replace("/", "_").strip(" .")
+    if not name:
+        name = fallback
+    if not name.lower().endswith(".safetensors"):
+        name = f"{name}.safetensors"
+    return name
+
+
+def _unique_target_path(directory: Path, filename: str) -> Path:
+    target = directory / filename
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
+    for index in range(2, 1000):
+        candidate = directory / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("Could not create a unique LoRA filename.")
 
 
 def _cache_info_payload() -> dict[str, object]:
@@ -141,6 +339,92 @@ async def instant_reference_lora_profiles(_request):
 @ROUTES.get("/instant-reference-lora/last-lora")
 async def instant_reference_lora_last_lora(_request):
     return web.json_response(read_last_lora_info())
+
+
+@ROUTES.get("/instant-reference-lora/library")
+async def instant_reference_lora_library(_request):
+    return web.json_response(_library_payload())
+
+
+@ROUTES.get("/instant-reference-lora/library/thumbnail")
+async def instant_reference_lora_library_thumbnail(request):
+    try:
+        lora_id = _safe_lora_id(request.query.get("id", ""))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+    manifest = _read_json(_manifest_path(lora_id))
+    thumbnail_path = _resolve_thumbnail_path(manifest)
+    if thumbnail_path is None:
+        return web.json_response({"error": "Thumbnail image was not found."}, status=404)
+    return web.FileResponse(path=thumbnail_path)
+
+
+@ROUTES.post("/instant-reference-lora/library/save")
+async def instant_reference_lora_library_save(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body."}, status=400)
+
+    try:
+        lora_id = _safe_lora_id(str(payload.get("id", "")))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+    manifest_path = _manifest_path(lora_id)
+    manifest = _read_json(manifest_path)
+    lora_path = _resolve_generated_lora(lora_id, manifest)
+    if lora_path is None:
+        return web.json_response({"error": "LoRA file was not found."}, status=404)
+
+    target_dir = ensure_dir(get_runtime_paths().generated_loras.parent)
+    raw_filename = str(payload.get("filename", "")).strip()
+    filename = _sanitize_lora_filename(raw_filename, fallback=lora_path.name)
+    target_path = _unique_target_path(target_dir, filename)
+    shutil.copy2(lora_path, target_path)
+
+    manifest["lora_path"] = str(lora_path)
+    manifest["saved_lora_path"] = str(target_path)
+    _write_json(manifest_path, manifest)
+    return web.json_response({"success": True, "saved_lora_path": str(target_path)})
+
+
+@ROUTES.post("/instant-reference-lora/library/delete")
+async def instant_reference_lora_library_delete(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body."}, status=400)
+
+    try:
+        lora_id = _safe_lora_id(str(payload.get("id", "")))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+    manifest_path = _manifest_path(lora_id)
+    manifest = _read_json(manifest_path)
+    lora_path = _resolve_generated_lora(lora_id, manifest)
+    if lora_path is None:
+        return web.json_response({"error": "LoRA file was not found."}, status=404)
+
+    outputs_root = get_runtime_paths().generated_loras.resolve()
+    resolved_lora_path = lora_path.resolve()
+    if not _is_path_within(outputs_root, resolved_lora_path):
+        return web.json_response({"error": "Only generated LoRA files can be deleted."}, status=400)
+
+    resolved_lora_path.unlink(missing_ok=True)
+    try:
+        if resolved_lora_path.parent.exists() and not any(resolved_lora_path.parent.iterdir()):
+            resolved_lora_path.parent.rmdir()
+    except OSError:
+        pass
+
+    manifest["deleted_lora_path"] = str(resolved_lora_path)
+    if manifest.get("lora_path") == str(resolved_lora_path):
+        manifest.pop("lora_path", None)
+    _write_json(manifest_path, manifest)
+    return web.json_response({"success": True})
 
 
 @ROUTES.post("/instant-reference-lora/open-profiles")

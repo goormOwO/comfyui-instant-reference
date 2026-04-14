@@ -11,6 +11,7 @@ const TRAINING_NODE_NAMES = new Set([
 let profileSlotMapPromise = null;
 let cacheRefreshTimer = null;
 const CACHE_REFRESH_INTERVAL_MS = 5000;
+const LIBRARY_STYLE_ID = "instant-reference-lora-library-style";
 
 async function fetchJson(path, options = {}) {
   const response = await api.fetchApi(path, options);
@@ -79,55 +80,6 @@ function extractStringOutput(message) {
   }
 
   return "";
-}
-
-async function downloadLora(node) {
-  let loraPath = node.__instantReferenceLoraLoraPath;
-  if (!loraPath) {
-    try {
-      const payload = await fetchJson("/instant-reference-lora/last-lora");
-      if (payload?.exists && typeof payload.path === "string" && payload.path.trim()) {
-        loraPath = payload.path;
-        node.__instantReferenceLoraLoraPath = loraPath;
-      }
-    } catch (error) {
-      showToast("error", "Instant Reference LoRA", error.message);
-      return;
-    }
-  }
-  if (!loraPath) {
-    showToast("warn", "Instant Reference LoRA", "Run the node first to create a LoRA.");
-    return;
-  }
-
-  try {
-    const query = new URLSearchParams({ path: loraPath });
-    const response = await api.fetchApi(`/instant-reference-lora/download?${query.toString()}`);
-    if (!response.ok) {
-      let message = `Download failed: ${response.status}`;
-      try {
-        const payload = await response.json();
-        if (payload?.error) {
-          message = payload.error;
-        }
-      } catch {
-        // Keep the generic message.
-      }
-      throw new Error(message);
-    }
-
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = loraPath.split(/[\\/]/).pop() || "instant_reference_lora.safetensors";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.URL.revokeObjectURL(url);
-  } catch (error) {
-    showToast("error", "Instant Reference LoRA", error.message);
-  }
 }
 
 function nodeMatches(nodeData, names) {
@@ -267,6 +219,350 @@ function startAutoCacheRefresh() {
   }, CACHE_REFRESH_INTERVAL_MS);
 }
 
+function ensureLibraryStyles() {
+  if (document.getElementById(LIBRARY_STYLE_ID)) {
+    return;
+  }
+  const style = document.createElement("style");
+  style.id = LIBRARY_STYLE_ID;
+  style.textContent = `
+    .ir-lora-library-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.62);
+    }
+    .ir-lora-library {
+      width: min(1120px, calc(100vw - 36px));
+      height: min(780px, calc(100vh - 36px));
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid #4b5563;
+      border-radius: 8px;
+      background: #15171a;
+      color: #f3f4f6;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+      font-family: Arial, sans-serif;
+    }
+    .ir-lora-library-header {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid #374151;
+    }
+    .ir-lora-library-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .ir-lora-library-subtitle {
+      margin-top: 4px;
+      color: #a7b0bd;
+      font-size: 12px;
+    }
+    .ir-lora-library-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .ir-lora-library-button {
+      min-height: 32px;
+      border: 1px solid #64748b;
+      border-radius: 6px;
+      padding: 6px 10px;
+      background: #23272f;
+      color: #f8fafc;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .ir-lora-library-button:hover {
+      background: #2f3641;
+    }
+    .ir-lora-library-button-danger {
+      border-color: #b45353;
+      background: #3a2020;
+    }
+    .ir-lora-library-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+    }
+    .ir-lora-library-status {
+      padding: 32px 12px;
+      color: #cbd5e1;
+      text-align: center;
+    }
+    .ir-lora-library-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 12px;
+    }
+    .ir-lora-library-card {
+      overflow: hidden;
+      border: 1px solid #3f4754;
+      border-radius: 8px;
+      background: #1c2026;
+    }
+    .ir-lora-library-thumb {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      display: block;
+      background: #2a3038;
+    }
+    .ir-lora-library-placeholder {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #2a3038;
+      color: #a7b0bd;
+      font-size: 13px;
+    }
+    .ir-lora-library-card-body {
+      padding: 10px;
+    }
+    .ir-lora-library-name {
+      overflow-wrap: anywhere;
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .ir-lora-library-meta {
+      margin-top: 6px;
+      color: #b8c0cc;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .ir-lora-library-tags {
+      margin-top: 8px;
+      max-height: 42px;
+      overflow: hidden;
+      color: #d6dde7;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .ir-lora-library-card-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 10px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function formatLibraryDate(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "";
+  }
+  return new Date(value * 1000).toLocaleString();
+}
+
+async function saveLibraryItem(item, refresh) {
+  const fallback = item.file_name || `${item.name || "instant_reference_lora"}.safetensors`;
+  const filename = window.prompt("Save LoRA as", fallback);
+  if (filename === null) {
+    return;
+  }
+  const payload = await fetchJson("/instant-reference-lora/library/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: item.id, filename }),
+  });
+  showToast("info", "Instant Reference LoRA", `Saved to ${payload.saved_lora_path}`);
+  await refresh();
+}
+
+async function deleteLibraryItem(item, refresh) {
+  const confirmed = window.confirm(`Delete generated LoRA "${item.file_name}"?`);
+  if (!confirmed) {
+    return;
+  }
+  await fetchJson("/instant-reference-lora/library/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: item.id }),
+  });
+  showToast("warn", "Instant Reference LoRA", "Generated LoRA deleted.");
+  await refresh();
+}
+
+function createLibraryCard(item, refresh) {
+  const card = document.createElement("div");
+  card.className = "ir-lora-library-card";
+
+  if (item.has_thumbnail && item.thumbnail_url) {
+    const image = document.createElement("img");
+    image.className = "ir-lora-library-thumb";
+    image.loading = "lazy";
+    image.src = api.apiURL(item.thumbnail_url);
+    image.alt = item.file_name || "LoRA thumbnail";
+    card.appendChild(image);
+  } else {
+    const placeholder = document.createElement("div");
+    placeholder.className = "ir-lora-library-placeholder";
+    placeholder.textContent = "No thumbnail";
+    card.appendChild(placeholder);
+  }
+
+  const body = document.createElement("div");
+  body.className = "ir-lora-library-card-body";
+
+  const name = document.createElement("div");
+  name.className = "ir-lora-library-name";
+  name.textContent = item.file_name || item.name || item.id;
+  body.appendChild(name);
+
+  const meta = document.createElement("div");
+  meta.className = "ir-lora-library-meta";
+  const profile = item.profile_name || item.profile || "unknown profile";
+  const saved = item.saved ? "Saved" : "Generated";
+  meta.textContent = `${profile} · ${item.size_human || ""} · ${saved}`;
+  body.appendChild(meta);
+
+  const date = document.createElement("div");
+  date.className = "ir-lora-library-meta";
+  date.textContent = formatLibraryDate(item.modified_at);
+  body.appendChild(date);
+
+  if (item.tags) {
+    const tags = document.createElement("div");
+    tags.className = "ir-lora-library-tags";
+    tags.textContent = item.tags;
+    body.appendChild(tags);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "ir-lora-library-card-actions";
+
+  const saveButton = document.createElement("button");
+  saveButton.className = "ir-lora-library-button";
+  saveButton.textContent = "Save";
+  saveButton.addEventListener("click", async () => {
+    try {
+      await saveLibraryItem(item, refresh);
+    } catch (error) {
+      showToast("error", "Instant Reference LoRA", error.message);
+    }
+  });
+  actions.appendChild(saveButton);
+
+  const deleteButton = document.createElement("button");
+  deleteButton.className = "ir-lora-library-button ir-lora-library-button-danger";
+  deleteButton.textContent = "Delete";
+  deleteButton.addEventListener("click", async () => {
+    try {
+      await deleteLibraryItem(item, refresh);
+    } catch (error) {
+      showToast("error", "Instant Reference LoRA", error.message);
+    }
+  });
+  actions.appendChild(deleteButton);
+
+  body.appendChild(actions);
+  card.appendChild(body);
+  return card;
+}
+
+function openLoraLibrary() {
+  ensureLibraryStyles();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "ir-lora-library-backdrop";
+
+  const modal = document.createElement("div");
+  modal.className = "ir-lora-library";
+  backdrop.appendChild(modal);
+
+  const header = document.createElement("div");
+  header.className = "ir-lora-library-header";
+  modal.appendChild(header);
+
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("div");
+  title.className = "ir-lora-library-title";
+  title.textContent = "Instant Reference LoRA Library";
+  const subtitle = document.createElement("div");
+  subtitle.className = "ir-lora-library-subtitle";
+  subtitle.textContent = "Review generated LoRAs, save keepers, or delete misses.";
+  titleWrap.appendChild(title);
+  titleWrap.appendChild(subtitle);
+  header.appendChild(titleWrap);
+
+  const headerActions = document.createElement("div");
+  headerActions.className = "ir-lora-library-actions";
+  header.appendChild(headerActions);
+
+  const refreshButton = document.createElement("button");
+  refreshButton.className = "ir-lora-library-button";
+  refreshButton.textContent = "Refresh";
+  headerActions.appendChild(refreshButton);
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "ir-lora-library-button";
+  closeButton.textContent = "Close";
+  headerActions.appendChild(closeButton);
+
+  const body = document.createElement("div");
+  body.className = "ir-lora-library-body";
+  modal.appendChild(body);
+
+  const close = () => backdrop.remove();
+  closeButton.addEventListener("click", close);
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      close();
+    }
+  });
+
+  const refresh = async () => {
+    body.innerHTML = "";
+    const loading = document.createElement("div");
+    loading.className = "ir-lora-library-status";
+    loading.textContent = "Loading LoRAs...";
+    body.appendChild(loading);
+    try {
+      const payload = await fetchJson("/instant-reference-lora/library");
+      body.innerHTML = "";
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      subtitle.textContent = `${items.length} generated LoRAs · Save copies to ${payload.lora_dir || "LoRA folder"}`;
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "ir-lora-library-status";
+        empty.textContent = "No generated LoRAs yet.";
+        body.appendChild(empty);
+        return;
+      }
+      const grid = document.createElement("div");
+      grid.className = "ir-lora-library-grid";
+      for (const item of items) {
+        grid.appendChild(createLibraryCard(item, refresh));
+      }
+      body.appendChild(grid);
+    } catch (error) {
+      body.innerHTML = "";
+      const failed = document.createElement("div");
+      failed.className = "ir-lora-library-status";
+      failed.textContent = error.message;
+      body.appendChild(failed);
+      showToast("error", "Instant Reference LoRA", error.message);
+    }
+  };
+
+  refreshButton.addEventListener("click", refresh);
+  document.body.appendChild(backdrop);
+  refresh();
+}
+
 function ensureNodeWidgets(node) {
   if (node.__instantReferenceLoraWidgetsReady) {
     return;
@@ -282,8 +578,8 @@ function ensureNodeWidgets(node) {
     }
   }, { serialize: false });
 
-  node.addWidget("button", "Download LoRA", null, async () => {
-    await downloadLora(node);
+  node.addWidget("button", "Open LoRA Library", null, () => {
+    openLoraLibrary();
   }, { serialize: false });
 
   const clearCacheWidget = node.addWidget("button", "Clear Cache (...)", null, async () => {
