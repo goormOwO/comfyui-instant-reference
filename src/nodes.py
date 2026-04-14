@@ -12,11 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import comfy.model_management
 import comfy.sd
 import comfy.utils
 import folder_paths
+import torch
 from comfy_api.latest import ComfyExtension, io
+from PIL import Image, ImageOps
 
 from .profiles import ProfileDefinition, SlotSpec, load_profiles, profile_map, profiles_fingerprint, replace_profile_tokens
 from .runtime import (
@@ -66,6 +69,7 @@ def _read_project_version() -> str:
 NODE_VERSION = _read_project_version()
 MAX_TRAIN_STEPS_PATTERN = re.compile(r"^\s*max_train_steps\s*=\s*(\d+)\s*$", re.MULTILINE)
 MIXED_PRECISION_PATTERN = re.compile(r'^\s*mixed_precision\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 @io.comfytype(io_type="LORA_STACK")
@@ -130,6 +134,53 @@ def _hash_options(value: dict[str, Any]) -> str:
 
 def _split_tags(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _resolve_image_folder(folder_path: Any) -> Path:
+    raw_path = str(folder_path).strip()
+    if not raw_path:
+        raise RuntimeError("Image folder path is required.")
+    path = Path(raw_path).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        raise RuntimeError(f"Image folder was not found: {path}")
+    return path
+
+
+def _folder_image_paths(folder_path: Path, recursive: bool, max_images: int) -> list[Path]:
+    pattern = "**/*" if recursive else "*"
+    paths = [
+        path
+        for path in sorted(folder_path.glob(pattern))
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    ]
+    if max_images > 0:
+        paths = paths[:max_images]
+    if not paths:
+        raise RuntimeError(f"No images were found in folder: {folder_path}")
+    return paths
+
+
+def _load_folder_images(folder_path: Any, recursive: bool, max_images: int, resize_to_first: bool) -> tuple[Any, str]:
+    image_paths = _folder_image_paths(
+        _resolve_image_folder(folder_path),
+        recursive=bool(recursive),
+        max_images=max(0, int(max_images)),
+    )
+    arrays: list[np.ndarray] = []
+    target_size: tuple[int, int] | None = None
+    for image_path in image_paths:
+        with Image.open(image_path) as image:
+            loaded = ImageOps.exif_transpose(image).convert("RGB")
+            if target_size is None:
+                target_size = loaded.size
+            elif loaded.size != target_size:
+                if not resize_to_first:
+                    raise RuntimeError(
+                        "Folder images have different sizes. Enable resize_to_first or use matching image sizes."
+                    )
+                loaded = loaded.resize(target_size, Image.Resampling.LANCZOS)
+            arrays.append(np.asarray(loaded, dtype=np.float32) / 255.0)
+    return torch.from_numpy(np.stack(arrays, axis=0)), "\n".join(str(path) for path in image_paths)
 
 
 def _collect_dataset_tags(captions: dict[str, str]) -> str:
@@ -1078,9 +1129,47 @@ class InstantReferenceLoRALoad(io.ComfyNode):
         )
 
 
+class InstantReferenceLoadImagesInFolder(io.ComfyNode):
+    CATEGORY = "reference/training"
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="InstantReferenceLoadImagesInFolder",
+            display_name="Instant Reference Load Images In Folder",
+            category=cls.CATEGORY,
+            inputs=[
+                io.String.Input("folder_path", multiline=False),
+                io.Boolean.Input("recursive", default=False),
+                io.Int.Input("max_images", default=0, min=0, max=10000),
+                io.Boolean.Input("resize_to_first", default=True),
+            ],
+            outputs=[
+                io.Image.Output(display_name="images"),
+                io.String.Output(display_name="image_paths"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, folder_path, recursive, max_images, resize_to_first) -> io.NodeOutput:
+        images, image_paths = _load_folder_images(
+            folder_path,
+            recursive=recursive,
+            max_images=max_images,
+            resize_to_first=resize_to_first,
+        )
+        return io.NodeOutput(images, image_paths)
+
+
 class ReferenceTrainingExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
-        return [InstantReferenceLoRA, InstantReferenceLoRATrain, InstantReferenceLoRAApply, InstantReferenceLoRALoad]
+        return [
+            InstantReferenceLoRA,
+            InstantReferenceLoRATrain,
+            InstantReferenceLoRAApply,
+            InstantReferenceLoRALoad,
+            InstantReferenceLoadImagesInFolder,
+        ]
 
 
 def _v1_slot_type(slot_type: str):
@@ -1232,6 +1321,32 @@ class InstantReferenceLoRALoadV1:
         return output.result
 
 
+class InstantReferenceLoadImagesInFolderV1:
+    CATEGORY = "reference/training"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "image_paths")
+    FUNCTION = "run"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "folder_path": ("STRING", {"default": "", "multiline": False}),
+                "recursive": ("BOOLEAN", {"default": False}),
+                "max_images": ("INT", {"default": 0, "min": 0, "max": 10000}),
+                "resize_to_first": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    def run(self, folder_path, recursive, max_images, resize_to_first):
+        return _load_folder_images(
+            folder_path,
+            recursive=recursive,
+            max_images=max_images,
+            resize_to_first=resize_to_first,
+        )
+
+
 class TaggingOptionsV1:
     CATEGORY = "reference/training"
     RETURN_TYPES = ("TAGGING_OPTIONS",)
@@ -1289,6 +1404,7 @@ NODE_CLASS_MAPPINGS = {
     "InstantReferenceLoRATrain": InstantReferenceLoRATrainV1,
     "InstantReferenceLoRAApply": InstantReferenceLoRAApplyV1,
     "InstantReferenceLoRALoad": InstantReferenceLoRALoadV1,
+    "InstantReferenceLoadImagesInFolder": InstantReferenceLoadImagesInFolderV1,
     "ReferenceTaggingOptions": TaggingOptionsV1,
     "ReferenceTrainOptions": TrainOptionsV1,
 }
@@ -1298,6 +1414,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "InstantReferenceLoRATrain": "Instant Reference LoRA Train",
     "InstantReferenceLoRAApply": "Instant Reference LoRA Apply",
     "InstantReferenceLoRALoad": "Instant Reference LoRA Load",
+    "InstantReferenceLoadImagesInFolder": "Instant Reference Load Images In Folder",
     "ReferenceTaggingOptions": "Reference Tagging Options",
     "ReferenceTrainOptions": "Reference Train Options",
 }
