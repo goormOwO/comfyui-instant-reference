@@ -100,7 +100,7 @@ def _safe_lora_id(raw_id: str) -> str:
 
 
 def _manifest_path(lora_id: str) -> Path:
-    return get_runtime_paths().cache / lora_id / "manifest.json"
+    return _generated_lora_dir(lora_id) / "manifest.json"
 
 
 def _generated_lora_dir(lora_id: str) -> Path:
@@ -113,6 +113,20 @@ def _latest_generated_lora(lora_id: str) -> Path | None:
         return None
     candidates = sorted(lora_dir.glob("*.safetensors"), key=lambda item: item.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
+
+
+def _metadata_path(lora_path: Path) -> Path:
+    return lora_path.with_suffix(".metadata.json")
+
+
+def _resolve_generated_sidecar(raw_path: object) -> Path | None:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    sidecar_path = Path(raw_path).expanduser().resolve()
+    generated_root = get_runtime_paths().generated_loras.resolve()
+    if _is_path_within(generated_root, sidecar_path) and sidecar_path.exists() and sidecar_path.is_file():
+        return sidecar_path
+    return None
 
 
 def _resolve_generated_lora(lora_id: str, manifest: dict[str, object]) -> Path | None:
@@ -167,7 +181,24 @@ def _resolve_dataset_dir(manifest: dict[str, object]) -> Path | None:
     return _find_dataset_dir_by_captions(manifest.get("captions"))
 
 
-def _resolve_thumbnail_path(manifest: dict[str, object]) -> Path | None:
+def _resolve_preview_sidecar(lora_path: Path, manifest: dict[str, object]) -> Path | None:
+    manifest_preview = _resolve_generated_sidecar(manifest.get("preview_path"))
+    if manifest_preview is not None:
+        return manifest_preview
+
+    metadata = _read_json(_metadata_path(lora_path))
+    metadata_preview = _resolve_generated_sidecar(metadata.get("preview_url"))
+    if metadata_preview is not None:
+        return metadata_preview
+
+    base_path = lora_path.with_suffix("")
+    for preview_path in sorted(lora_path.parent.glob(f"{base_path.name}.preview.*")):
+        if preview_path.is_file():
+            return preview_path
+    return None
+
+
+def _resolve_dataset_thumbnail_path(manifest: dict[str, object]) -> Path | None:
     datasets_root = get_runtime_paths().datasets.resolve()
     raw_thumbnail = manifest.get("thumbnail_path")
     if isinstance(raw_thumbnail, str) and raw_thumbnail.strip():
@@ -183,6 +214,13 @@ def _resolve_thumbnail_path(manifest: dict[str, object]) -> Path | None:
         if candidates:
             return candidates[0]
     return None
+
+
+def _resolve_thumbnail_path(lora_path: Path, manifest: dict[str, object]) -> Path | None:
+    preview_path = _resolve_preview_sidecar(lora_path, manifest)
+    if preview_path is not None:
+        return preview_path
+    return _resolve_dataset_thumbnail_path(manifest)
 
 
 def _profile_name(profile_key: object) -> str:
@@ -201,12 +239,17 @@ def _library_item(lora_id: str) -> dict[str, object] | None:
         return None
 
     stat = lora_path.stat()
-    thumbnail_path = _resolve_thumbnail_path(manifest)
+    thumbnail_path = _resolve_thumbnail_path(lora_path, manifest)
+    metadata = _read_json(_metadata_path(lora_path))
     tags = manifest.get("tags")
+    metadata_tags = metadata.get("tags")
+    if not isinstance(tags, str) and isinstance(metadata_tags, list):
+        tags = ", ".join(str(tag) for tag in metadata_tags)
     if not isinstance(tags, str):
         tags = ""
     captions = manifest.get("captions")
     caption_count = len(captions) if isinstance(captions, dict) else 0
+    profile = manifest.get("profile", metadata.get("base_model", ""))
     return {
         "id": lora_id,
         "name": lora_path.stem,
@@ -215,8 +258,8 @@ def _library_item(lora_id: str) -> dict[str, object] | None:
         "size_bytes": stat.st_size,
         "size_human": _format_bytes(stat.st_size),
         "modified_at": stat.st_mtime,
-        "profile": manifest.get("profile", ""),
-        "profile_name": _profile_name(manifest.get("profile")),
+        "profile": profile,
+        "profile_name": _profile_name(profile),
         "tags": tags,
         "caption_count": caption_count,
         "has_thumbnail": thumbnail_path is not None,
@@ -231,9 +274,6 @@ def _library_payload() -> dict[str, object]:
         for lora_dir in paths.generated_loras.iterdir():
             if lora_dir.is_dir() and LORA_ID_PATTERN.match(lora_dir.name):
                 ids.add(lora_dir.name)
-    for manifest in paths.cache.glob("*/manifest.json"):
-        if LORA_ID_PATTERN.match(manifest.parent.name):
-            ids.add(manifest.parent.name)
 
     items = [item for lora_id in sorted(ids) if (item := _library_item(lora_id)) is not None]
     items.sort(
@@ -338,7 +378,10 @@ async def instant_reference_lora_library_thumbnail(request):
         return web.json_response({"error": str(exc)}, status=400)
 
     manifest = _read_json(_manifest_path(lora_id))
-    thumbnail_path = _resolve_thumbnail_path(manifest)
+    lora_path = _resolve_generated_lora(lora_id, manifest)
+    if lora_path is None:
+        return web.json_response({"error": "LoRA file was not found."}, status=404)
+    thumbnail_path = _resolve_thumbnail_path(lora_path, manifest)
     if thumbnail_path is None:
         return web.json_response({"error": "Thumbnail image was not found."}, status=404)
     return web.FileResponse(path=thumbnail_path)

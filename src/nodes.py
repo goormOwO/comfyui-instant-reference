@@ -176,6 +176,10 @@ def _copy_lora_preview(lora_path: Path, thumbnail_path: Path | None) -> Path | N
     return preview_path
 
 
+def _lora_manifest_path(lora_path: Path) -> Path:
+    return lora_path.parent / "manifest.json"
+
+
 def _read_json_dict(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -879,7 +883,10 @@ def _train_reference_lora(model, clip, images, profile, tagging_options=None, tr
         )
         metadata_path = _write_lora_metadata(cached_lora, selected_profile, thumbnail_path, manifest_payload)
         manifest_payload["metadata_path"] = str(metadata_path)
+        preview_path = _preview_sidecar_path(cached_lora, thumbnail_path)
+        manifest_payload["preview_path"] = str(preview_path) if preview_path and preview_path.exists() else ""
         write_json(manifest, manifest_payload)
+        write_json(_lora_manifest_path(cached_lora), manifest_payload)
         _record_last_lora(cached_lora)
         return TrainingResult(lora_path=cached_lora, tags=dataset_tags)
     finally:
@@ -904,22 +911,25 @@ def _execute_reference_apply(model, clip, lora_stack) -> io.NodeOutput:
     return io.NodeOutput(patched_model, patched_clip, output_stack)
 
 
-def _execute_reference_load(model, clip, lora_path, model_strength=1.0, clip_strength=1.0) -> io.NodeOutput:
+def _execute_reference_load(model=None, clip=None, lora_path="", model_strength=1.0, clip_strength=1.0) -> io.NodeOutput:
     resolved_lora_path = _resolve_lora_path_input(lora_path)
     resolved_model_strength = float(model_strength)
     resolved_clip_strength = float(clip_strength)
-    patched_model, patched_clip = _apply_lora(
-        model,
-        clip,
-        resolved_lora_path,
-        resolved_model_strength,
-        resolved_clip_strength,
-    )
     lora_stack = _ensure_lora_stack_entry(
         resolved_lora_path,
         resolved_model_strength,
         resolved_clip_strength,
     )
+    patched_model = model
+    patched_clip = clip
+    if model is not None and clip is not None:
+        patched_model, patched_clip = _apply_lora(
+            model,
+            clip,
+            resolved_lora_path,
+            resolved_model_strength,
+            resolved_clip_strength,
+        )
     return io.NodeOutput(patched_model, patched_clip, str(resolved_lora_path), lora_stack)
 
 
@@ -1043,11 +1053,11 @@ class InstantReferenceLoRALoad(io.ComfyNode):
             display_name="Instant Reference LoRA Load",
             category=cls.CATEGORY,
             inputs=[
-                io.Model.Input("model"),
-                io.Clip.Input("clip"),
                 io.String.Input("lora_path", multiline=False),
                 io.Float.Input("model_strength", default=1.0),
                 io.Float.Input("clip_strength", default=1.0),
+                io.Model.Input("model", optional=True),
+                io.Clip.Input("clip", optional=True),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
@@ -1058,7 +1068,7 @@ class InstantReferenceLoRALoad(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model, clip, lora_path, model_strength, clip_strength) -> io.NodeOutput:
+    def execute(cls, lora_path, model_strength, clip_strength, model=None, clip=None) -> io.NodeOutput:
         return _execute_reference_load(
             model,
             clip,
@@ -1201,15 +1211,17 @@ class InstantReferenceLoRALoadV1:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("MODEL",),
-                "clip": ("CLIP",),
                 "lora_path": ("STRING", {"default": "", "multiline": False}),
                 "model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
                 "clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.05}),
             },
+            "optional": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+            },
         }
 
-    def run(self, model, clip, lora_path, model_strength, clip_strength):
+    def run(self, lora_path, model_strength, clip_strength, model=None, clip=None):
         output = _execute_reference_load(
             model,
             clip,
