@@ -352,7 +352,7 @@ function ensureLibraryStyles() {
     }
     .ir-lora-library-card-actions {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 6px;
       margin-top: 10px;
     }
@@ -367,19 +367,47 @@ function formatLibraryDate(value) {
   return new Date(value * 1000).toLocaleString();
 }
 
-async function saveLibraryItem(item, refresh) {
-  const fallback = item.file_name || `${item.name || "instant_reference_lora"}.safetensors`;
-  const filename = window.prompt("Save LoRA as", fallback);
-  if (filename === null) {
-    return;
+function graphCenterPosition() {
+  const canvas = app.canvas;
+  const graphCanvas = canvas?.canvas;
+  const ds = canvas?.ds;
+  if (!graphCanvas || !ds) {
+    return [100, 100];
   }
-  const payload = await fetchJson("/instant-reference-lora/library/save", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: item.id, filename }),
-  });
-  showToast("info", "Instant Reference LoRA", `Saved to ${payload.saved_lora_path}`);
-  await refresh();
+  return [
+    (graphCanvas.width * 0.5 - ds.offset[0]) / ds.scale,
+    (graphCanvas.height * 0.5 - ds.offset[1]) / ds.scale,
+  ];
+}
+
+function addLoadLoraNode(item) {
+  const node = LiteGraph.createNode("InstantReferenceLoRALoad");
+  if (!node) {
+    throw new Error("Instant Reference LoRA Load node is not registered. Restart ComfyUI and refresh the browser.");
+  }
+
+  const [x, y] = graphCenterPosition();
+  node.pos[0] = x;
+  node.pos[1] = y;
+  app.graph.add(node);
+
+  const loraPathWidget = findWidget(node, "lora_path");
+  if (loraPathWidget) {
+    loraPathWidget.value = item.lora_path || "";
+  }
+
+  app.graph.setDirtyCanvas(true, true);
+  showToast("info", "Instant Reference LoRA", "Added Instant Reference LoRA Load node.");
+}
+
+function downloadLibraryItem(item) {
+  const query = new URLSearchParams({ path: item.lora_path || "" });
+  const anchor = document.createElement("a");
+  anchor.href = api.apiURL(`/instant-reference-lora/download?${query.toString()}`);
+  anchor.download = item.file_name || "instant_reference_lora.safetensors";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 async function deleteLibraryItem(item, refresh) {
@@ -425,8 +453,7 @@ function createLibraryCard(item, refresh) {
   const meta = document.createElement("div");
   meta.className = "ir-lora-library-meta";
   const profile = item.profile_name || item.profile || "unknown profile";
-  const saved = item.saved ? "Saved" : "Generated";
-  meta.textContent = `${profile} · ${item.size_human || ""} · ${saved}`;
+  meta.textContent = `${profile} · ${item.size_human || ""}`;
   body.appendChild(meta);
 
   const date = document.createElement("div");
@@ -444,17 +471,23 @@ function createLibraryCard(item, refresh) {
   const actions = document.createElement("div");
   actions.className = "ir-lora-library-card-actions";
 
-  const saveButton = document.createElement("button");
-  saveButton.className = "ir-lora-library-button";
-  saveButton.textContent = "Save";
-  saveButton.addEventListener("click", async () => {
+  const loadButton = document.createElement("button");
+  loadButton.className = "ir-lora-library-button";
+  loadButton.textContent = "Load";
+  loadButton.addEventListener("click", () => {
     try {
-      await saveLibraryItem(item, refresh);
+      addLoadLoraNode(item);
     } catch (error) {
       showToast("error", "Instant Reference LoRA", error.message);
     }
   });
-  actions.appendChild(saveButton);
+  actions.appendChild(loadButton);
+
+  const downloadButton = document.createElement("button");
+  downloadButton.className = "ir-lora-library-button";
+  downloadButton.textContent = "Download";
+  downloadButton.addEventListener("click", () => downloadLibraryItem(item));
+  actions.appendChild(downloadButton);
 
   const deleteButton = document.createElement("button");
   deleteButton.className = "ir-lora-library-button ir-lora-library-button-danger";
@@ -493,7 +526,7 @@ function openLoraLibrary() {
   title.textContent = "Instant Reference LoRA Library";
   const subtitle = document.createElement("div");
   subtitle.className = "ir-lora-library-subtitle";
-  subtitle.textContent = "Review generated LoRAs, save keepers, or delete misses.";
+  subtitle.textContent = "Review generated LoRAs, use them in the workflow, or delete misses.";
   titleWrap.appendChild(title);
   titleWrap.appendChild(subtitle);
   header.appendChild(titleWrap);
@@ -534,7 +567,7 @@ function openLoraLibrary() {
       const payload = await fetchJson("/instant-reference-lora/library");
       body.innerHTML = "";
       const items = Array.isArray(payload.items) ? payload.items : [];
-      subtitle.textContent = `${items.length} generated LoRAs · Save copies to ${payload.lora_dir || "LoRA folder"}`;
+      subtitle.textContent = `${items.length} generated LoRAs`;
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "ir-lora-library-status";
@@ -583,7 +616,7 @@ function ensureNodeWidgets(node) {
   }, { serialize: false });
 
   const clearCacheWidget = node.addWidget("button", "Clear Cache (...)", null, async () => {
-    const confirmed = window.confirm("Clear the Instant Reference LoRA cache?");
+    const confirmed = window.confirm("Clear temporary Instant Reference LoRA cache? Generated LoRA files will be kept.");
     if (!confirmed) {
       return;
     }

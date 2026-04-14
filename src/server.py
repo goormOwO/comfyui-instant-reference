@@ -15,7 +15,6 @@ from .profiles import load_profiles
 
 ROUTES = PromptServer.instance.routes
 LORA_ID_PATTERN = re.compile(r"^[a-f0-9]{64}$")
-SAFE_FILENAME_PATTERN = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
 def _plugin_root() -> Path:
@@ -28,7 +27,7 @@ def _profiles_dir() -> Path:
 
 def _cache_dirs() -> list[Path]:
     paths = get_runtime_paths()
-    return [paths.cache, paths.generated_loras, paths.datasets, paths.artifacts]
+    return [paths.cache, paths.datasets, paths.artifacts]
 
 
 def _last_lora_info_path() -> Path:
@@ -54,6 +53,18 @@ def _read_json(path: Path) -> dict[str, object]:
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     ensure_dir(path.parent)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _sidecar_paths(lora_path: Path) -> list[Path]:
+    base_path = lora_path.with_suffix("")
+    sidecars = [
+        base_path.with_suffix(".metadata.json"),
+        lora_path.with_name(f"{lora_path.name}.rgthree-info.json"),
+        base_path.with_suffix(".cm-info.json"),
+        base_path.with_suffix(".cminfo.json"),
+    ]
+    sidecars.extend(lora_path.parent.glob(f"{base_path.name}.preview.*"))
+    return sidecars
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -191,8 +202,6 @@ def _library_item(lora_id: str) -> dict[str, object] | None:
 
     stat = lora_path.stat()
     thumbnail_path = _resolve_thumbnail_path(manifest)
-    saved_lora_path = manifest.get("saved_lora_path")
-    saved = isinstance(saved_lora_path, str) and Path(saved_lora_path).exists()
     tags = manifest.get("tags")
     if not isinstance(tags, str):
         tags = ""
@@ -212,8 +221,6 @@ def _library_item(lora_id: str) -> dict[str, object] | None:
         "caption_count": caption_count,
         "has_thumbnail": thumbnail_path is not None,
         "thumbnail_url": f"/instant-reference-lora/library/thumbnail?id={lora_id}" if thumbnail_path else "",
-        "saved": saved,
-        "saved_lora_path": saved_lora_path if saved else "",
     }
 
 
@@ -238,29 +245,6 @@ def _library_payload() -> dict[str, object]:
         "generated_loras_dir": str(paths.generated_loras),
         "lora_dir": str(paths.generated_loras.parent),
     }
-
-
-def _sanitize_lora_filename(raw_name: str, fallback: str) -> str:
-    name = SAFE_FILENAME_PATTERN.sub("_", raw_name.strip()) if raw_name.strip() else fallback
-    name = name.replace("\\", "_").replace("/", "_").strip(" .")
-    if not name:
-        name = fallback
-    if not name.lower().endswith(".safetensors"):
-        name = f"{name}.safetensors"
-    return name
-
-
-def _unique_target_path(directory: Path, filename: str) -> Path:
-    target = directory / filename
-    if not target.exists():
-        return target
-    stem = target.stem
-    suffix = target.suffix
-    for index in range(2, 1000):
-        candidate = directory / f"{stem}_{index}{suffix}"
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError("Could not create a unique LoRA filename.")
 
 
 def _cache_info_payload() -> dict[str, object]:
@@ -360,36 +344,6 @@ async def instant_reference_lora_library_thumbnail(request):
     return web.FileResponse(path=thumbnail_path)
 
 
-@ROUTES.post("/instant-reference-lora/library/save")
-async def instant_reference_lora_library_save(request):
-    try:
-        payload = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body."}, status=400)
-
-    try:
-        lora_id = _safe_lora_id(str(payload.get("id", "")))
-    except ValueError as exc:
-        return web.json_response({"error": str(exc)}, status=400)
-
-    manifest_path = _manifest_path(lora_id)
-    manifest = _read_json(manifest_path)
-    lora_path = _resolve_generated_lora(lora_id, manifest)
-    if lora_path is None:
-        return web.json_response({"error": "LoRA file was not found."}, status=404)
-
-    target_dir = ensure_dir(get_runtime_paths().generated_loras.parent)
-    raw_filename = str(payload.get("filename", "")).strip()
-    filename = _sanitize_lora_filename(raw_filename, fallback=lora_path.name)
-    target_path = _unique_target_path(target_dir, filename)
-    shutil.copy2(lora_path, target_path)
-
-    manifest["lora_path"] = str(lora_path)
-    manifest["saved_lora_path"] = str(target_path)
-    _write_json(manifest_path, manifest)
-    return web.json_response({"success": True, "saved_lora_path": str(target_path)})
-
-
 @ROUTES.post("/instant-reference-lora/library/delete")
 async def instant_reference_lora_library_delete(request):
     try:
@@ -414,6 +368,12 @@ async def instant_reference_lora_library_delete(request):
         return web.json_response({"error": "Only generated LoRA files can be deleted."}, status=400)
 
     resolved_lora_path.unlink(missing_ok=True)
+    for sidecar_path in _sidecar_paths(resolved_lora_path):
+        try:
+            if sidecar_path.exists() and _is_path_within(outputs_root, sidecar_path.resolve()):
+                sidecar_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         if resolved_lora_path.parent.exists() and not any(resolved_lora_path.parent.iterdir()):
             resolved_lora_path.parent.rmdir()
