@@ -780,7 +780,7 @@ def _ensure_lora_stack_entry(lora_path: Path, model_strength: float, clip_streng
 
 
 class InstantReferenceLoRA(io.ComfyNode):
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1024,7 +1024,7 @@ def _execute_reference_lora(
 
 
 class InstantReferenceLoRATrain(io.ComfyNode):
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1069,7 +1069,7 @@ class InstantReferenceLoRATrain(io.ComfyNode):
 
 
 class InstantReferenceLoRAApply(io.ComfyNode):
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1095,7 +1095,7 @@ class InstantReferenceLoRAApply(io.ComfyNode):
 
 
 class InstantReferenceLoRALoad(io.ComfyNode):
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1130,7 +1130,7 @@ class InstantReferenceLoRALoad(io.ComfyNode):
 
 
 class InstantReferenceLoadImagesInFolder(io.ComfyNode):
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
 
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -1192,7 +1192,7 @@ def _all_optional_profile_inputs() -> dict[str, tuple]:
 
 
 class InstantReferenceLoRAV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("MODEL", "CLIP", "STRING", "LORA_STACK", "STRING")
     RETURN_NAMES = ("model", "clip", "lora_path", "lora_stack", "tags")
     FUNCTION = "run"
@@ -1233,7 +1233,7 @@ class InstantReferenceLoRAV1:
 
 
 class InstantReferenceLoRATrainV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("LORA_STACK", "STRING")
     RETURN_NAMES = ("lora_stack", "tags")
     FUNCTION = "run"
@@ -1270,7 +1270,7 @@ class InstantReferenceLoRATrainV1:
 
 
 class InstantReferenceLoRAApplyV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("MODEL", "CLIP", "LORA_STACK")
     RETURN_NAMES = ("model", "clip", "lora_stack")
     FUNCTION = "run"
@@ -1291,7 +1291,7 @@ class InstantReferenceLoRAApplyV1:
 
 
 class InstantReferenceLoRALoadV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("MODEL", "CLIP", "STRING", "LORA_STACK")
     RETURN_NAMES = ("model", "clip", "lora_path", "lora_stack")
     FUNCTION = "run"
@@ -1322,7 +1322,7 @@ class InstantReferenceLoRALoadV1:
 
 
 class InstantReferenceLoadImagesInFolderV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "image_paths")
     FUNCTION = "run"
@@ -1348,7 +1348,7 @@ class InstantReferenceLoadImagesInFolderV1:
 
 
 class TaggingOptionsV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("TAGGING_OPTIONS",)
     RETURN_NAMES = ("tagging_options",)
     FUNCTION = "build"
@@ -1372,7 +1372,7 @@ class TaggingOptionsV1:
 
 
 class TrainOptionsV1:
-    CATEGORY = "reference/training"
+    CATEGORY = "Instant Reference"
     RETURN_TYPES = ("TRAIN_OPTIONS",)
     RETURN_NAMES = ("train_options",)
     FUNCTION = "build"
