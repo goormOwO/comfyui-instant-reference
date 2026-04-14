@@ -12,6 +12,7 @@ runtime_env/.venv/
 
 runtime/
 ComfyUI-upstream/
+/uv.lock
 
 *.log
 node.zip

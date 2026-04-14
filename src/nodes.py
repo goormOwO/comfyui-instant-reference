@@ -108,6 +108,12 @@ class TrainOptions:
     force_retrain: bool = False
 
 
+@dataclass(frozen=True)
+class TrainingResult:
+    lora_path: Path
+    tags: str
+
+
 def _plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -122,6 +128,17 @@ def _hash_options(value: dict[str, Any]) -> str:
 
 def _split_tags(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _collect_dataset_tags(captions: dict[str, str]) -> str:
+    tags: list[str] = []
+    seen: set[str] = set()
+    for caption in captions.values():
+        for tag in _split_tags(caption):
+            if tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+    return ",".join(tags)
 
 
 def _unwrap_options_input(value: Any | None, key: str) -> dict[str, Any]:
@@ -617,6 +634,7 @@ class InstantReferenceLoRA(io.ComfyNode):
                 io.Clip.Output(display_name="clip"),
                 io.String.Output(display_name="lora_path"),
                 LoRAStack.Output(display_name="lora_stack"),
+                io.String.Output(display_name="tags"),
             ],
         )
 
@@ -639,7 +657,7 @@ class InstantReferenceLoRA(io.ComfyNode):
         )
 
 
-def _train_reference_lora(model, clip, images, profile, tagging_options=None, train_options=None) -> Path:
+def _train_reference_lora(model, clip, images, profile, tagging_options=None, train_options=None) -> TrainingResult:
     ephemeral_artifacts: list[Path] = []
     try:
         profile_key = profile["profile"]
@@ -661,6 +679,7 @@ def _train_reference_lora(model, clip, images, profile, tagging_options=None, tr
             options=resolved_tagging,
             target_steps=target_steps,
         )
+        dataset_tags = _collect_dataset_tags(captions)
 
         resolved_slots: dict[str, ResolvedSlot] = {}
         for slot in selected_profile.slots:
@@ -705,6 +724,7 @@ def _train_reference_lora(model, clip, images, profile, tagging_options=None, tr
                     "profile": selected_profile.key,
                     "profile_file": str(selected_profile.file_path),
                     "captions": captions,
+                    "tags": dataset_tags,
                     "tagging_options": resolved_tagging.__dict__,
                     "train_options": resolved_train.__dict__,
                     "resolved_slots": {name: slot.replacement for name, slot in resolved_slots.items()},
@@ -718,7 +738,7 @@ def _train_reference_lora(model, clip, images, profile, tagging_options=None, tr
             cached_lora = _run_training(selected_profile, run_dir, output_dir, config_path, log_path=run_log)
 
         _record_last_lora(cached_lora)
-        return cached_lora
+        return TrainingResult(lora_path=cached_lora, tags=dataset_tags)
     finally:
         _cleanup_ephemeral_artifacts(ephemeral_artifacts)
 
@@ -732,8 +752,8 @@ def _execute_reference_train(model, clip, images, profile, tagging_options=None,
         tagging_options=tagging_options,
         train_options=train_options,
     )
-    lora_stack = _ensure_lora_stack_entry(trained_lora, 1.0, 1.0)
-    return io.NodeOutput(lora_stack)
+    lora_stack = _ensure_lora_stack_entry(trained_lora.lora_path, 1.0, 1.0)
+    return io.NodeOutput(lora_stack, trained_lora.tags)
 
 
 def _execute_reference_apply(model, clip, lora_stack) -> io.NodeOutput:
@@ -741,7 +761,16 @@ def _execute_reference_apply(model, clip, lora_stack) -> io.NodeOutput:
     return io.NodeOutput(patched_model, patched_clip, output_stack)
 
 
-def _execute_reference_lora(model, clip, images, profile, model_strength=1.0, clip_strength=1.0, tagging_options=None, train_options=None) -> io.NodeOutput:
+def _execute_reference_lora(
+    model,
+    clip,
+    images,
+    profile,
+    model_strength=1.0,
+    clip_strength=1.0,
+    tagging_options=None,
+    train_options=None,
+) -> io.NodeOutput:
     trained_lora = _train_reference_lora(
         model,
         clip,
@@ -753,12 +782,22 @@ def _execute_reference_lora(model, clip, images, profile, model_strength=1.0, cl
     patched_model, patched_clip = _apply_lora(
         model,
         clip,
-        trained_lora,
+        trained_lora.lora_path,
         float(model_strength),
         float(clip_strength),
     )
-    lora_stack = _ensure_lora_stack_entry(trained_lora, float(model_strength), float(clip_strength))
-    return io.NodeOutput(patched_model, patched_clip, str(trained_lora), lora_stack)
+    lora_stack = _ensure_lora_stack_entry(
+        trained_lora.lora_path,
+        float(model_strength),
+        float(clip_strength),
+    )
+    return io.NodeOutput(
+        patched_model,
+        patched_clip,
+        str(trained_lora.lora_path),
+        lora_stack,
+        trained_lora.tags,
+    )
 
 
 class InstantReferenceLoRATrain(io.ComfyNode):
@@ -785,6 +824,7 @@ class InstantReferenceLoRATrain(io.ComfyNode):
             ],
             outputs=[
                 LoRAStack.Output(display_name="lora_stack"),
+                io.String.Output(display_name="tags"),
             ],
         )
 
@@ -857,8 +897,8 @@ def _all_optional_profile_inputs() -> dict[str, tuple]:
 
 class InstantReferenceLoRAV1:
     CATEGORY = "reference/training"
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "LORA_STACK")
-    RETURN_NAMES = ("model", "clip", "lora_path", "lora_stack")
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "LORA_STACK", "STRING")
+    RETURN_NAMES = ("model", "clip", "lora_path", "lora_stack", "tags")
     FUNCTION = "run"
 
     @classmethod
@@ -898,8 +938,8 @@ class InstantReferenceLoRAV1:
 
 class InstantReferenceLoRATrainV1:
     CATEGORY = "reference/training"
-    RETURN_TYPES = ("LORA_STACK",)
-    RETURN_NAMES = ("lora_stack",)
+    RETURN_TYPES = ("LORA_STACK", "STRING")
+    RETURN_NAMES = ("lora_stack", "tags")
     FUNCTION = "run"
 
     @classmethod
