@@ -107,6 +107,7 @@ class TrainOptions:
     cache_text_encoder_outputs: bool = True
     seed_override: int = -1
     force_retrain: bool = False
+    train_batch_size_override: int = 0
 
 
 @dataclass(frozen=True)
@@ -292,6 +293,7 @@ def _train_options_from_input(value: Any | None) -> TrainOptions:
         cache_text_encoder_outputs=bool(resolved.get("cache_text_encoder_outputs", True)),
         seed_override=int(resolved.get("seed_override", -1)),
         force_retrain=bool(resolved.get("force_retrain", False)),
+        train_batch_size_override=int(resolved.get("train_batch_size_override", 0)),
     )
 
 
@@ -556,6 +558,8 @@ def _apply_train_options(config_text: str, options: TrainOptions) -> str:
     overrides: dict[str, Any] = {}
     if options.steps_override > 0:
         overrides["max_train_steps"] = options.steps_override
+    if options.train_batch_size_override > 0:
+        overrides["train_batch_size"] = options.train_batch_size_override
     if options.learning_rate_override > 0:
         overrides["learning_rate"] = options.learning_rate_override
     if options.network_dim_override > 0:
@@ -1260,6 +1264,7 @@ class TrainOptionsV1:
                     "cache_text_encoder_outputs": ("BOOLEAN", {"default": True}),
                     "seed_override": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
                     "force_retrain": ("BOOLEAN", {"default": False}),
+                    "train_batch_size_override": ("INT", {"default": 0, "min": 0, "max": 256}),
             }
         }
 
