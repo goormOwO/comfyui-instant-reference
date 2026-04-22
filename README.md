@@ -49,6 +49,10 @@ Helper node for training overrides. Use it to override steps, learning rate, net
 
 Default SDXL-oriented profile based on `sdxl_train_network.py`. It trains a LoCon-style LoRA at `1024x1024`, uses `bf16`, keeps the run short with `50` default steps, and is meant for fast reference adaptation on SDXL checkpoints. Its profile declares only `{{model:MODEL}}`, so only a model slot is exposed alongside the images.
 
+### SDXL Reference LoRA (Low VRAM)
+
+Optional SDXL profile for memory-constrained setups. It switches to standard `networks.lora`, uses `Adafactor`, keeps UNet-only training, and enables `fp8_base`, `full_bf16`, and disk-backed caches for latents and text encoder outputs. It is intended as a lower-VRAM alternative when the default LoCon-oriented profile is too heavy.
+
 ### Anima Reference LoRA
 
 An Anima-oriented profile based on `anima_train_network.py`. It also runs at `1024x1024` with `50` default steps, trains a lightweight LoRA for the UNet only, and its profile declares `{{model:MODEL}}`, `{{clip:CLIP}}`, and `{{vae:VAE}}`, so those sockets are exposed automatically.

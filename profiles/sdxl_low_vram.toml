@@ -1,0 +1,59 @@
+name = "SDXL Reference LoRA (Low VRAM)"
+script = "sdxl_train_network.py"
+config = """
+pretrained_model_name_or_path = "{{model:MODEL}}"
+train_data_dir = "{{TRAIN_DIR}}"
+output_dir = "{{OUTPUT_DIR}}"
+output_name = "{{OUTPUT_NAME}}"
+caption_extension = "{{CAPTION_EXTENSION}}"
+
+resolution = "1024,1024"
+enable_bucket = true
+min_bucket_reso = 1024
+max_bucket_reso = 1024
+bucket_no_upscale = true
+flip_aug = false
+random_crop = false
+keep_tokens = 1
+
+max_train_steps = 50
+optimizer_type = "Adafactor"
+optimizer_args = [
+  "scale_parameter=False",
+  "relative_step=False",
+  "warmup_init=False",
+]
+learning_rate = 0.0003
+lr_scheduler = "constant_with_warmup"
+lr_warmup_steps = 5
+
+network_module = "networks.lora"
+network_dim = 16
+network_alpha = 16
+scale_weight_norms = 1
+network_train_unet_only = true
+
+loss_type = "l2"
+min_snr_gamma = 5.0
+noise_offset = 0.0357
+
+train_batch_size = 1
+vae_batch_size = 1
+mixed_precision = "bf16"
+full_bf16 = true
+fp8_base = true
+sdpa = true
+xformers = false
+
+save_model_as = "safetensors"
+save_precision = "bf16"
+seed = 42
+gradient_checkpointing = true
+cache_latents = true
+cache_latents_to_disk = true
+cache_text_encoder_outputs = true
+cache_text_encoder_outputs_to_disk = true
+max_data_loader_n_workers = 0
+persistent_data_loader_workers = false
+no_half_vae = true
+"""
