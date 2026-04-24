@@ -8,7 +8,7 @@ license = { file = "LICENSE" }
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/goormOwO/comfyui-instant-reference"
+Repository = "https://github.com/cstria0106/comfyui-instant-reference"
 
 [tool.comfy]
 PublisherId = "goormowo"
